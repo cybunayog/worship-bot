@@ -10,6 +10,7 @@
 const colors = require("chalk");
 const Discord = require("discord.js");
 require('dotenv').config();
+const ytdl = require("ytdl-core");
 
 /*********************
  * Global Properties *
@@ -27,6 +28,7 @@ const CONFIG = {
 };
 
 const queue = new Map();
+
 /*************
  * Functions *
  *************/
@@ -47,20 +49,37 @@ function handleCommand(msg, cmd, args) {
 
     switch (cmd) {
         case "help":
-            channel.send("1...");
-            channel.send("2...");
-            channel.send("3!");
+            embed
+                .setAuthor("Worship Bot Commands to Use")
+                .addFields(
+                    {
+                        name: "-help",
+                        value: "Displays a list of commands available for this bot"
+                    },
+                    {
+                        name: "-play",
+                        value: "Plays a song based on the YouTube link.\n Example: -play https://www.youtube.com/watch?v=5qap5aO4i9A&ab_channel=ChilledCow"
+                    },
+                    {
+                        name: "-skip",
+                        value: "Skips the current song to the next queued song. If there are no songs in the queue, the bot will automatically stop."
+                    },
+                    {
+                        name: "-stop",
+                        value: "Stops the current song and turns the bot off."
+                    },
+            );
+
+            channel.send(embed); 
             break;
         case "play":
-            channel.send("3...");
-            channel.send("2...");
-            channel.send("1!");
+            execute(msg, serverQueue);
             break;
         case "skip":
-
+            skip(msg, serverQueue);
             break;
         case "stop":
-
+            stop(msg, serverQueue);
             break;
         default:
             msg.reply(
@@ -72,6 +91,12 @@ function handleCommand(msg, cmd, args) {
     }
 }
 
+/**
+ *  Handles playing audio into voice channels.
+ *
+ *  @param  {Object}    msg         The message object.
+ *  @param  {Object}    serverQueue The map of songs in the queue.
+ */
 async function execute(msg, serverQueue) {
     const args = msg.content.split(" "),
         channel = msg.channel;
@@ -89,11 +114,11 @@ async function execute(msg, serverQueue) {
             "I need the permissions to join and speak in your voice channel!"
         );
     }
-
-    const songInfo = await yudl.getInfo(args[1]);
+    console.log("URL: " + args[1]);
+    const songInfo = await ytdl.getInfo(args[1]);
     const song = {
-        title: songInfo.title,
-        url: songInfo.video_url
+        title: songInfo.videoDetails.title,
+        url: songInfo.videoDetails.video_url
     };
 
     if (!serverQueue) {
@@ -107,8 +132,7 @@ async function execute(msg, serverQueue) {
         };
 
         queue.set(msg.guild.id, queueConstruct);
-
-        queueConstuct.songs.push(song);
+        queueConstruct.songs.push(song);
 
         try {
             var connection = await voiceChannel.join();
@@ -116,7 +140,7 @@ async function execute(msg, serverQueue) {
             play(msg.guild, queueConstruct.songs[0]);
         } catch (err) {
             console.log(err);
-            queue.delete(message.guild.id);
+            queue.delete(msg.guild.id);
             return channel.send(err);
         }
     } else {
@@ -125,27 +149,69 @@ async function execute(msg, serverQueue) {
     }
 }
 
-function skip(msg, serverQueue) {
-
-}
-
-function stop(msg, serverQueue) {
-
-}
 /**
- *  Print a Discord message to the console with colors for readability.
+ *  Handles skipping function into voice channels.
  *
- *  @param  {Object}     msg     The message object.
+ *  @param  {Object}    msg         The message object.
+ *  @param  {Object}    serverQueue The map of songs in the queue.
  */
-function logMessageWithColors(msg) {
-    const d = new Date(msg.createdTimestamp),
-        h = d.getHours(),
-        m = d.getMinutes(),
-        s = d.getSeconds(),
-        time = colors.grey(`[${h}:${m}:${s}]`),
-        author = colors.cyan(`@${msg.author.username}`);
+function skip(msg, serverQueue) {
+    const channel = msg.channel;
+    if (!msg.member.voice.channel) {
+        return channel.send(
+            "You have to be in a voice channel to stop the music!"
+        );
+    }
 
-    console.log(`${time} ${author}: ${msg.content}`);
+    if (!serverQueue) {
+        return channel.send(
+            "There is no song I could skip!"
+        );
+    }
+
+    serverQueue.connection.dispatcher.end();
+}
+
+/**
+ *  Handles stopping audio into voice channels.
+ *
+ *  @param  {Object}    msg         The message object.
+ *  @param  {Object}    serverQueue The map of songs in the queue.
+ */
+function stop(msg, serverQueue) {
+    const channel = msg.channel;
+    if (!msg.member.voice.channel) {
+        return channel.send(
+            "You have to be in a voice channel to stop the music!"
+        );
+    }
+    serverQueue.songs = [];
+    serverQueue.connection.dispatcher.end();
+}
+
+/**
+ *  Handles play function into voice channels.
+ *
+ *  @param  {Object}    guild         The guild object.
+ *  @param  {String}    song          The song entered into the query.
+ */
+function play(guild, song) {
+    const serverQueue = queue.get(guild.id);
+    if (!song) {
+        serverQueue.voiceChannel.leave();
+        queue.delete(guild.id);
+        return;
+    }
+
+    const dispatcher = serverQueue.connection
+        .play(ytdl(song.url))
+        .on("finish", () => {
+            serverQueue.songs.shift();
+            play(guild, serverQueue.songs[0]);
+        })
+        .on("error", error => console.error(error));
+    dispatcher.setVolumeLogarithmic(serverQueue.volume / 5);
+    serverQueue.textChannel.send(`Start playing: **${song.title}**`)
 }
 
 /**************************
@@ -192,8 +258,6 @@ client.on("message", async msg => {
         msg.reply("pong");
     }
 });
-
-
 
 // Login with the bot's token
 client.login(CONFIG.token).then();
